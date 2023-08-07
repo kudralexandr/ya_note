@@ -1,0 +1,52 @@
+from notes.models import Note
+from notes.forms import NoteForm
+
+from django.contrib.auth import get_user_model
+from django.test import TestCase, Client
+from django.urls import reverse
+
+User = get_user_model()
+
+
+class NoteListViewTest(TestCase):
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.author = User.objects.create(
+            username='testuser',
+            password='testpassword'
+        )
+        cls.note = Note.objects.create(
+            title='Заголовок',
+            text='Текст',
+            author=cls.author,
+        )
+        cls.reader = User.objects.create(
+            username='testreader',
+            password='testpassword'
+        )
+
+    def test_notes_list_with_single_note(self):
+        url = reverse('notes:list')
+        # Создаём пользователя
+        author_client = Client()
+        # Авторизуем его
+        author_client.force_login(self.author)
+        # Получаем список записей
+        response = author_client.get(url)
+        # Получаем список записей из контекста
+        object_list = response.context['notes_feed']
+        # Проверяем запись в списке
+        self.assertIn(self.note, object_list)
+
+    def test_note_not_in_list_for_another_user(self):
+        url = reverse('notes:list')
+        # Входим под reader
+        reader_client = Client()
+        reader_client.force_login(self.reader)
+        # Получаем список записей
+        response = reader_client.get(url)
+        # Получаем список записей из контекста
+        object_list = response.context['notes_feed']
+        # Проверяем запись в списке
+        self.assertNotIn(self.note, object_list)
