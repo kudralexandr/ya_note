@@ -1,24 +1,11 @@
 #  Тесты на unittest для проекта YaNote.
 
-'''
-1.отдельная заметка передаётся на страницу со списком заметок в списке
- object_list в словаре context;
-2.в список заметок одного пользователя не попадают заметки
- другого пользователя;
-3.на страницы создания и редактирования заметки передаются формы.
-'''
-
-from datetime import datetime, timedelta
-from django.utils import timezone
-
-from django.conf import settings
-from django.test import TestCase, Client
-# Импортируем функцию reverse(), она понадобится для получения адреса страницы.
 from django.urls import reverse
-
 from django.contrib.auth import get_user_model
+from django.test import TestCase
 
 from notes.models import Note
+from notes.forms import NoteForm
 
 User = get_user_model()
 
@@ -35,33 +22,26 @@ class TestContentList(TestCase):
             author=cls.author,
         )
 
-    def test_note_in_list_for_author(self):
-        url = reverse('notes:list')
-        # Создаем клиента
-        #author_client = Client()
-        # Авторизуем клиента
-        #author_client.force_login(self.author)
-        # Запрашиваем страницу со списком заметок:
-        #response = author_client.get(url)
-        # Получаем список объектов из контекста,
-        # Проверяем, что заметка находится в этом списке:
-        self.client.force_login(self.author)
-        response = self.client.get(url)
-        assert self.note in response.context['object_list']
+    #  1. отдельная заметка передаётся на страницу со списком заметок.
+    #  в списке object_list в словаре context.
+    #  2.в список заметок одного пользователя не попадают заметки
+    #  другого пользователя.
+    def test_note_in_list_for_any_users(self):
+        users = (
+            (self.author, True),
+            (self.admin, False),
+        )
+        for user, note_in_list_exp in users:  # 1-T, 2-F
+            with self.subTest(user=user):
+                url = reverse('notes:list')
+                self.client.force_login(user)
+                response = self.client.get(url)
+                self.assertEqual(
+                    note_in_list_exp,
+                    self.note in response.context['object_list']
+                )
 
-    # В этом тесте тоже используем фикстуру заметки,
-    # но в качестве клиента используем admin_client;
-    # он не автор заметки, так что заметка не должна быть ему видна.
-    def test_note_not_in_list_for_another_user(self):
-        url = reverse('notes:list')
-        #admin_client = Client()
-        #admin_client.force_login(self.admin)
-        self.client.force_login(self.admin)
-        response = self.client.get(url)
-        #if response.context is not None:
-        assert self.note not in response.context['object_list']
-        #self.assertIsNone(response.context)
-
+    #  3. На страницы создания и редактирования заметки передаются формы.
     def test_authorized_client_has_form(self):
         urls = (
             ('notes:add', None),
@@ -73,3 +53,4 @@ class TestContentList(TestCase):
                 self.client.force_login(self.author)
                 response = self.client.get(url)
                 self.assertIn('form', response.context)
+                self.assertIsInstance(response.context['form'], NoteForm)

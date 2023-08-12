@@ -1,26 +1,28 @@
 #  Тесты на unittest для проекта YaNote.
 from http import HTTPStatus
-
-from django.contrib.auth import get_user_model
-from django.test import Client, TestCase
-from django.urls import reverse
-from django.core.exceptions import ValidationError
+from random import randint
 
 from pytils.translit import slugify
+
+from django.urls import reverse
+from django.contrib.auth import get_user_model
+
+from django.test import Client, TestCase
 
 from notes.forms import WARNING
 from notes.models import Note
 
+
 User = get_user_model()
 
-'''
-1.Залогиненный пользователь может создать заметку, а анонимный — не может.
-2.Невозможно создать две заметки с одинаковым slug.
-3.Если при создании заметки не заполнен slug, то он формируется автоматически,
- с помощью функции pytils.translit.slugify.
-4.Пользователь может редактировать и удалять свои заметки,
- но не может редактировать или удалять чужие.
-'''
+UCODE_TITLE = {randint(10001, 99999)}
+NOTE_TITLE = f'Заголовок заметки #code: {UCODE_TITLE}'
+NEW_NOTE_TITLE = 'Обновлённый заголовок заметки'
+NOTE_TEXT = 'Текст заметки'
+NEW_NOTE_TEXT = 'Обновлённый текст заметки'
+DEF_SLUG = 'myslugnote'
+DEF_SLUG_ARG = (DEF_SLUG,)
+NEW_SLUG = 'newslugnote'
 
 
 class TestNoteCreation(TestCase):
@@ -28,48 +30,59 @@ class TestNoteCreation(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.url = reverse('notes:add', None)
-        cls.user = User.objects.create(username='Автор Заметки')
-        cls.auth_client = Client()
-        cls.auth_client.force_login(cls.user)
+        cls.author = User.objects.create(username='Автор Заметки')
+        cls.author_client = Client()
+        cls.author_client.force_login(cls.author)
+        # Делаем всё то же самое для пользователя-читателя.
+        cls.reader = User.objects.create(username='Читатель')
+        cls.reader_client = Client()
+        cls.reader_client.force_login(cls.reader)
         cls.form_data = {
-            'title': 'Заголовок заметки',
-            'text': 'Текст заметки',
-            'slug': 'myslugnote',
+            'title': NOTE_TITLE,
+            'text': NOTE_TEXT,
+            'slug': DEF_SLUG,
+            'author': cls.author,
         }
-        
-    def test_anonymous_user_cant_create_note(self):
-        # Совершаем запрос от анонимного клиента, в POST-запросе отправляем
-        # предварительно подготовленные данные формы с текстом комментария.
-        self.client.post(self.url, data=self.form_data)
-        # Считаем количество комментариев.
-        notes_count = Note.objects.count()
-        # Ожидаем, что комментариев в базе нет - сравниваем с нулём.
-        self.assertEqual(notes_count, 0)
+        cls.form_data_upd = {
+            'title': NEW_NOTE_TITLE,
+            'text': NEW_NOTE_TEXT,
+            'slug': NEW_SLUG,
+        }
 
+        cls.note_success = reverse('notes:success', None)
+        cls.note_list = reverse('notes:list', None)
+        cls.note_detail = reverse('notes:detail', args=DEF_SLUG_ARG)
+        cls.edit_url = reverse('notes:edit', args=DEF_SLUG_ARG)
+        cls.delete_url = reverse('notes:delete', args=DEF_SLUG_ARG)
+
+    def is_note_in_db(self):
+        return Note.objects.filter(title=self.form_data['title']).exists()
+
+    #  1.1 Анонимный пользователь не может создать заметку.
+    def test_anonymous_user_cant_create_note(self):
+        self.client.post(self.url, data=self.form_data)
+        self.assertFalse(self.is_note_in_db())
+
+    #  1.2 Залогиненный пользователь может создать заметку.
     def test_user_can_create_note(self):
         # Совершаем запрос через авторизованный клиент.
-        response = self.auth_client.post(self.url, data=self.form_data)
-        # Проверяем, что редирект привёл к разделу с комментами.
+        response = self.reader_client.post(self.url, data=self.form_data)
         self.assertRedirects(response, reverse('notes:success'))
-        # Считаем количество комментариев.
-        notes_count = Note.objects.count()
-        # Убеждаемся, что есть один комментарий.
-        self.assertEqual(notes_count, 1)
-        # Получаем объект комментария из базы.
-        note = Note.objects.get()
-        # Проверяем, что все атрибуты комментария совпадают с ожидаемыми.
-        self.assertEqual(note.title, self.form_data['title'])
-        self.assertEqual(note.text, self.form_data['text'])
-        self.assertEqual(note.slug, self.form_data['slug'])
+        self.assertTrue(self.is_note_in_db())
+        if self.is_note_in_db():
+            note = Note.objects.get(title=self.form_data['title'])
+            # Проверяем, что все атрибуты заметки совпадают с ожидаемыми.
+            self.assertEqual(note.title, self.form_data['title'])
+            self.assertEqual(note.text, self.form_data['text'])
+            self.assertEqual(note.slug, self.form_data['slug'])
+            self.assertEqual(note.author, self.reader)
 
+    #  2.Невозможно создать две заметки с одинаковым slug.
     def test_double_slug(self):
-        response = self.auth_client.post(self.url, data=self.form_data)
-        self.assertRedirects(response, reverse('notes:success'))
-        response = self.auth_client.post(self.url, data=self.form_data)
-        #self.assertRaisesMessage(
-        #    ValidationError,
-        #    self.form_data['slug'] + WARNING
-        #)
+        note = Note(**self.form_data)
+        note.save()
+        notes_count_after_first_add = Note.objects.count()
+        response = self.author_client.post(self.url, data=self.form_data)
         self.assertFormError(
             response,
             form='form',
@@ -77,54 +90,72 @@ class TestNoteCreation(TestCase):
             errors=self.form_data['slug'] + WARNING
         )
         # Дополнительно убедимся, что комментарий не был создан.
-        notes_count = Note.objects.count()
-        self.assertEqual(notes_count, 1)
+        notes_count_after_second_add = Note.objects.count()
+        self.assertEqual(
+            notes_count_after_first_add, notes_count_after_second_add
+        )
 
+    #  3. Если при создании заметки не заполнен slug, то он формируется
+    # автоматически с помощью функции pytils.translit.slugify.
     def test_generate_slug(self):
         self.form_data['slug'] = ''
-        response = self.auth_client.post(self.url, data=self.form_data)
-        self.assertRedirects(response, reverse('notes:success'))
-        note = Note.objects.get()
+        response = self.author_client.post(self.url, data=self.form_data)
+        self.assertRedirects(response, self.note_success)
+        note = Note.objects.get(title=self.form_data['title'])
         self.assertEqual(note.slug, slugify(self.form_data['title']))
 
-
-class TestCommentEditDelete(TestCase):
-    NOTE_TITLE = 'Заголовок заметки'
-    NEW_NOTE_TITLE = 'Обновлённый заголовок заметки'
-    NOTE_TEXT = 'Текст заметки'
-    NEW_NOTE_TEXT = 'Обновлённый текст заметки'
-    
-    @classmethod
-    def setUpTestData(cls):
-        cls.author = User.objects.create(username='Автор комментария')
-        cls.author_client = Client()
-        cls.author_client.force_login(cls.author)
-        # Делаем всё то же самое для пользователя-читателя.
-        cls.reader = User.objects.create(username='Читатель')
-        cls.reader_client = Client()
-        cls.reader_client.force_login(cls.reader)
-        #  Создаем заметку
-        cls.note = Note.objects.create(
-            title=cls.NOTE_TITLE,
-            text=cls.NOTE_TEXT,
-            author=cls.author,
-            )
-        cls.note_success = reverse('notes:success', None)
-        cls.note_detail = reverse('notes:detail', args=(cls.note.slug,))
-        cls.note_list = reverse('notes:list', None)
-        # URL для редактирования.
-        cls.edit_url = reverse('notes:edit', args=(cls.note.slug,))
-        # URL для удаления комментария.
-        cls.delete_url = reverse('notes:delete', args=(cls.note.slug,))
-        # Формируем данные для POST-запроса по обновлению комментария.
-        cls.form_data = {
-            'title': cls.NEW_NOTE_TITLE,
-            'text': cls.NEW_NOTE_TEXT,
-            }
-
+    #  4.1 Пользователь может удалять свои заметки.
     def test_author_can_delete_note(self):
+        note = Note(**self.form_data)
+        note.save()
+        self.assertTrue(self.is_note_in_db())
         response = self.author_client.delete(self.delete_url)
         self.assertRedirects(response, self.note_success)
-        note_count = Note.objects.count()
-        self.assertEqual(note_count, 0)
+        self.assertFalse(self.is_note_in_db())
 
+    #  4.2 Пользователь не может удалять чужие заметки.
+    def test_user_cant_delete_note_of_another_user(self):
+        note = Note(**self.form_data)
+        note.save()
+        self.assertTrue(self.is_note_in_db())
+        response = self.reader_client.delete(self.delete_url)
+        # Проверяем, что вернулась 404 ошибка.
+        self.assertEqual(response.status_code, HTTPStatus.NOT_FOUND)
+        # Убедимся, что комментарий по-прежнему на месте.
+        self.assertTrue(self.is_note_in_db())
+
+    #  4.3 Пользователь может редактировать свои заметки.
+    def test_author_can_edit_note(self):
+        note = Note(**self.form_data)
+        note.save()
+        self.assertTrue(self.is_note_in_db())
+        response = self.author_client.post(
+            self.edit_url, data=self.form_data_upd
+        )
+        # Проверяем, что сработал редирект.
+        self.assertRedirects(response, self.note_success)
+        note.refresh_from_db()
+        # Проверяем, что текст комментария соответствует обновленному.
+        self.assertEqual(note.title, NEW_NOTE_TITLE)
+        self.assertEqual(note.text, NEW_NOTE_TEXT)
+        self.assertEqual(note.slug, NEW_SLUG)
+
+    #  4.4 Пользователь не может редактировать чужие заметки.
+    def test_user_cant_edit_comment_of_another_user(self):
+        # Создаем запись в БД.
+        note = Note(**self.form_data)
+        note.save()
+        # Убеждаемся, что запись появилась в БД.
+        self.assertTrue(self.is_note_in_db())
+        # Выполняем запрос на редактирование от имени другого пользователя.
+        response = self.reader_client.post(
+            self.edit_url, data=self.form_data_upd
+        )
+        # Проверяем, что вернулась 404 ошибка.
+        self.assertEqual(response.status_code, HTTPStatus.NOT_FOUND)
+        # Обновляем объект комментария.
+        note.refresh_from_db()
+        # Проверяем, что текст остался тем же, что и был.
+        self.assertEqual(note.title, NOTE_TITLE)
+        self.assertEqual(note.text, NOTE_TEXT)
+        self.assertEqual(note.slug, DEF_SLUG)
